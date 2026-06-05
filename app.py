@@ -59,7 +59,7 @@ G = nx.DiGraph()
 for _, row in st.session_state.muavin_data.iterrows():
     u = row["Kaynak_Firma"]
     v = row["Hedef_Firma"]
-    volume = row + row["Alacak"]
+    volume = float(row + row["Alacak"])
     
     G.add_node(u, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
     G.add_node(v, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
@@ -91,9 +91,9 @@ for node in G.nodes():
 for node in G.nodes():
     risk_score = node_risks[node]
     G.nodes[node]["final_risk"] = round(risk_score, 1)
-    G.nodes[node]["community"] = communities[node]
+    G.nodes[node]["community"] = communities.get(node, "Diğer")
     
-    if marketing_focus and risk_score < 30.0 and communities[node] == "Alıcı / Müşteri Grubu (Küme-2)":
+    if marketing_focus and risk_score < 30.0 and communities.get(node, "") == "Alıcı / Müşteri Grubu (Küme-2)":
         G.nodes[node]["color"] = "#2ecc71"
         G.nodes[node]["size"] = 35
     elif risk_score > 60.0:
@@ -123,7 +123,7 @@ for node, attrs in G.nodes(data=True):
     )
 
 for u, v, attrs in G.edges(data=True):
-    edge_label = f"Hesap: {attrs['account_code']} (Hacim: {attrs['weight']:,} TL)"
+    edge_label = f"Hesap: {attrs['account_code']} (Hacim: {int(attrs['weight']):,} TL)"
     net.add_edge(u, v, value=attrs["weight"], title=edge_label, color="#bdc3c7")
 
 net.set_options("""
@@ -151,12 +151,16 @@ col_rep1, col_rep2 = st.columns(2)
 
 with col_rep1:
     st.subheader("🚨 GNN Erken Uyarı ve Risk Skor Tablosu")
-    risk_df = pd.DataFrame(["final_risk"], 
+    risk_data =["final_risk"],
             "Bulunduğu Küme": G.nodes[node]["community"]
         }
         for node in G.nodes()
-    ]).sort_values(by="Yapay Zeka Risk Skoru (%)", ascending=False)
-    st.dataframe(risk_df, use_container_width=True)
+    ]
+    if risk_data:
+        risk_df = pd.DataFrame(risk_data).sort_values(by="Yapay Zeka Risk Skoru (%)", ascending=False)
+        st.dataframe(risk_df, use_container_width=True)
+    else:
+        st.write("Veri yok")
 
 with col_rep2:
     st.subheader("🎯 B2B Akıllı Pazarlama ve Hedef Sıcak Kümeler")
