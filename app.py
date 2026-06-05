@@ -40,7 +40,7 @@ col_ctrl1, col_ctrl2 = st.columns(2)
 
 with col_ctrl1:
     st.subheader("🔴 GNN Risk Yayılım Simülatörü")
-    all_nodes = list(set(st.session_state.muavin_data["Kaynak_Firma"].unique()) | set(st.session_state.muavin_data["Hedef_Firma"].unique()))
+    all_nodes = sorted(list(set(st.session_state.muavin_data["Kaynak_Firma"].unique()) | set(st.session_state.muavin_data["Hedef_Firma"].unique())))
     options_list = + all_nodes
     high_risk_node = st.selectbox(
         "Ekosistemde Anlık Kriz / Temerrüt Yaşayan Firmayı Seçin (Risk Yayılımı):",
