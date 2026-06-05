@@ -13,9 +13,10 @@ st.title("🛡️ Project TrustGraph: Canlı Sunum Demosu")
 st.write("Mizan ve Muavin Defter Verilerinden Grafik Yapay Zeka Tabanlı Risk ve Pazarlama Yönetimi Platformu")
 
 # --- HAZIR SİMÜLASYON VERİ SETİ ---
-# Demo ilk açıldığında jürinin boş bir ekran görmemesi için gerçekçi bir ticari ağ yüklüyoruz
+# Jüri önünde boş ekran olmaması için örnek ticari ağ verisi yüklüyoruz
 if "muavin_data" not in st.session_state or st.session_state.muavin_data.empty:
-    st.session_state.muavin_data = pd.DataFrame()
+    initial_data =
+    st.session_state.muavin_data = pd.DataFrame(initial_data)
 
 # --- SOL PANEL: İNTERAKTİF VERİ GİRİŞİ ---
 st.sidebar.header("📊 Canlı Veri Manipülasyonu")
@@ -61,8 +62,16 @@ for _, row in st.session_state.muavin_data.iterrows():
     v = row["Hedef_Firma"]
     volume = float(row + row["Alacak"])
     
-    G.add_node(u, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
-    G.add_node(v, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
+    if not G.has_node(u):
+        G.add_node(u, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
+    else:
+        G.nodes[u]["volume"] += volume
+
+    if not G.has_node(v):
+        G.add_node(v, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
+    else:
+        G.nodes[v]["volume"] += volume
+        
     G.add_edge(u, v, weight=volume, account_code=row["Hesap_Kodu"])
 
 node_risks = {node: 10.0 for node in G.nodes()}
@@ -76,7 +85,7 @@ if high_risk_node!= "Yok":
             neighbors = list(G.predecessors(node)) + list(G.successors(node))
             if neighbors:
                 avg_neighbor_risk = sum(node_risks[n] for n in neighbors) / len(neighbors)
-                temp_risks[node] = (1 - risk_alpha) * node_risks[node] + risk_alpha * avg_neighbor_risk
+                temp_risks[node] = (1.0 - risk_alpha) * node_risks[node] + risk_alpha * avg_neighbor_risk
         node_risks = temp_risks
 
 communities = {}
@@ -151,11 +160,13 @@ col_rep1, col_rep2 = st.columns(2)
 
 with col_rep1:
     st.subheader("🚨 GNN Erken Uyarı ve Risk Skor Tablosu")
-    risk_data =["final_risk"],
+    risk_data =
+    for node in G.nodes():
+        risk_data.append({
+            "Firma": node,
+            "Yapay Zeka Risk Skoru (%)": G.nodes[node]["final_risk"],
             "Bulunduğu Küme": G.nodes[node]["community"]
-        }
-        for node in G.nodes()
-    ]
+        })
     if risk_data:
         risk_df = pd.DataFrame(risk_data).sort_values(by="Yapay Zeka Risk Skoru (%)", ascending=False)
         st.dataframe(risk_df, use_container_width=True)
