@@ -7,145 +7,186 @@ import tempfile
 import os
 
 # Sayfa Genişlik ve Başlık Ayarı
-st.set_page_config(layout="wide", page_title="Project TrustGraph - Live Demo", page_icon="📊")
+st.set_page_config(layout="wide", page_title="Project TrustGraph - B2B Risk Platform", page_icon="🛡️")
 
-st.title("🛡️ Project TrustGraph: Canlı Sunum Demosu")
-st.write("Mizan ve Muavin Defter Verilerinden Grafik Yapay Zeka Tabanlı Risk ve Pazarlama Yönetimi Platformu")
+st.title("🛡️ Project TrustGraph: Excel Tabanlı B2B Risk ve Pazarlama Portalı")
+st.write("Excel Mizan Analizi, Kurumsal KKB, Memzuç ve Medya Duygu Analitiği ile Hibrit Skorlama")
 
-# --- HAZIR SİMÜLASYON VERİ SETİ ---
-if "muavin_data" not in st.session_state or st.session_state.muavin_data.empty:
-    st.session_state.muavin_data = pd.DataFrame(columns=[
-        "Kaynak_Firma", "Hedef_Firma", "Hesap_Kodu", "Hesap_Adi", "Borc", "Alacak"
+
+# --- HAZIR VARSAYILAN MİZAN VERİSİ ---
+@st.cache_data
+def get_mock_mizan():
+    # FIX: Boş DataFrame yerine sütunları tanımlı örnek veri döndür
+    return pd.DataFrame([
+        {"Cari_Unvan": "ABC Holding A.S.", "Hesap_Kodu": "120", "Borc": 500000.0, "Alacak": 300000.0},
+        {"Cari_Unvan": "DEF Tedarik Ltd.", "Hesap_Kodu": "320", "Borc": 200000.0, "Alacak": 400000.0},
+        {"Cari_Unvan": "GHI Alici A.S.",   "Hesap_Kodu": "120", "Borc": 150000.0, "Alacak": 100000.0},
+        {"Cari_Unvan": "JKL Uretici Ltd.", "Hesap_Kodu": "320", "Borc": 300000.0, "Alacak": 250000.0},
+        {"Cari_Unvan": "MNO Musteri A.S.", "Hesap_Kodu": "120", "Borc": 400000.0, "Alacak": 350000.0},
     ])
 
-# --- SOL PANEL: İNTERAKTİF VERİ GİRİŞİ ---
-st.sidebar.header("📊 Canlı Veri Manipülasyonu")
-st.sidebar.write("Mizan/Muavin tablolarını canlı düzenleyerek jüriye anlık grafik güncellenmesini gösterin.")
 
-with st.sidebar.expander("➕ Yeni Cari Bağlantı (Mizan Satırı) Ekle"):
-    new_src = st.text_input("Kaynak Firma", "Merkez_Firma_A")
-    new_dst = st.text_input("Hedef Firma", "Tedarikci_K")
-    new_code = st.selectbox("Hesap Tipi", ["120", "320"])
-    new_name = "Alıcılar" if new_code == "120" else "Satıcılar"
-    new_borc = st.number_input("Borç Toplamı (TL)", value=50000.0)
-    new_alacak = st.number_input("Alacak Toplamı (TL)", value=100000.0)
+# --- SOL PANEL: DOSYA YÜKLEME VE PARAMETRELER ---
+st.sidebar.header("📂 Excel Mizan Analiz Laboratuvarı")
+uploaded_file = st.sidebar.file_uploader("Kurumsal Excel Mizanı Yükle (.xlsx, .xls)", type=["xlsx", "xls"])
 
-    if st.button("Mizana Kaydet ve Grafiği Güncelle"):
-        new_row = pd.DataFrame([{
-            "Kaynak_Firma": new_src,
-            "Hedef_Firma": new_dst,
-            "Hesap_Kodu": new_code,
-            "Hesap_Adi": new_name,
-            "Borc": new_borc,
-            "Alacak": new_alacak
-        }])
-        st.session_state.muavin_data = pd.concat([st.session_state.muavin_data, new_row], ignore_index=True)
-        st.success("Yeni muavin kaydı başarıyla eklendi!")
-        st.rerun()
+if uploaded_file is not None:
+    try:
+        mizan_raw = pd.read_excel(uploaded_file)
+        st.sidebar.success("Excel başarıyla yüklendi ve parse edildi!")
+        mizan_df = mizan_raw.copy()
+    except Exception as e:
+        st.sidebar.error(f"Excel okunurken hata oluştu. Hazır örnek veri kullanılıyor. Hata: {e}")
+        mizan_df = get_mock_mizan()
+else:
+    st.sidebar.info("Şu an örnek mizan verisi aktif. Kendi Excel'inizi yükleyebilirsiniz.")
+    mizan_df = get_mock_mizan()
 
-# --- ANA SİMÜLASYON KONTROLLERİ ---
-col_ctrl1, col_ctrl2 = st.columns(2)
+# İlk N Müşteri/Tedarikçi Seçimi
+top_n = st.sidebar.slider("Analiz Edilecek İlk N Cari (Bakiye Büyüklüğüne Göre):", 2, 10, 5)
 
-with col_ctrl1:
-    st.subheader("🔴 GNN Risk Yayılım Simülatörü")
-    all_nodes = sorted(list(
-        set(st.session_state.muavin_data["Kaynak_Firma"].unique()) |
-        set(st.session_state.muavin_data["Hedef_Firma"].unique())
-    ))
-    options_list = ["Yok"] + all_nodes  # FIX: boş liste + all_nodes
-    high_risk_node = st.selectbox(
-        "Ekosistemde Anlık Kriz / Temerrüt Yaşayan Firmayı Seçin (Risk Yayılımı):",
-        options=options_list
+# --- SKORLAMA AĞIRLIK KAT SAYILARI ---
+st.sidebar.subheader("⚙️ Risk Komitesi Ağırlık Katsayıları")
+st.sidebar.caption("Toplam katsayının 1.0 olmasına dikkat ediniz.")
+w_kkb  = st.sidebar.slider("KKB Skoru Ağırlığı:",          0.0, 1.0, 0.4, 0.05)
+w_mem  = st.sidebar.slider("Memzuç Skoru Ağırlığı:",        0.0, 1.0, 0.3, 0.05)
+w_news = st.sidebar.slider("Haber/Medya Risk Ağırlığı:",     0.0, 1.0, 0.2, 0.05)
+w_con  = st.sidebar.slider("Konsantrasyon Risk Ağırlığı:",   0.0, 1.0, 0.1, 0.05)
+
+total_w = w_kkb + w_mem + w_news + w_con
+st.sidebar.write(f"**Toplam Katsayı Gücü:** {round(total_w, 2)}")
+if abs(total_w - 1.0) > 0.01:
+    st.sidebar.warning("⚠️ Katsayılar toplamı 1.0 olmalıdır! Lütfen ayarlayın.")
+
+
+# --- ANALİZ MOTORU: BAKIYE VE HACİM HESAPLAMA ---
+# FIX: Özgün satır: `mizan_df = (mizan_df - mizan_df["Alacak"]).abs()` → sütun bazlı doğru hesaplama
+mizan_df["Bakiye"]      = (mizan_df["Borc"] - mizan_df["Alacak"]).abs()
+mizan_df["Islem_Hacmi"] = mizan_df["Borc"] + mizan_df["Alacak"]
+
+# FIX: `mizan_df.str.contains(...)` → doğrusu: sütun üzerinde filtreleme
+df_120 = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.contains("120")].sort_values(
+    by="Islem_Hacmi", ascending=False).head(top_n)
+df_320 = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.contains("320")].sort_values(
+    by="Islem_Hacmi", ascending=False).head(top_n)
+
+final_caris = pd.concat([df_120, df_320], ignore_index=True)
+
+total_mizan_volume = mizan_df["Islem_Hacmi"].sum()
+if total_mizan_volume == 0:
+    total_mizan_volume = 1.0
+
+
+# --- İNTERAKTİF RİSK GİRDİLERİ ---
+st.subheader("📝 İstihbarat Matrisi ve Dynamic Data Editor")
+st.write("Sistem, Excel'den en büyük alıcı ve satıcılarınızı ayıkladı. Bu firmalar için KKB, Memzuç ve Haber skorlarını jüri önünde değiştirebilirsiniz:")
+
+if "intelligence_df" not in st.session_state or len(st.session_state.intelligence_df) != len(final_caris):
+    intel_records = []  # FIX: `intel_records =` → boş liste eksikti
+    for _, row in final_caris.iterrows():
+        default_kkb  = 20.0 if "Holding" in row["Cari_Unvan"] or "A.S." in row["Cari_Unvan"] else 50.0
+        default_mem  = 15.0 if "A.S."    in row["Cari_Unvan"] else 40.0
+        default_news = 10.0 if "A"       in row["Cari_Unvan"] else 60.0
+
+        intel_records.append({
+            "Cari Unvanı":                        row["Cari_Unvan"],
+            "Hesap Tipi":                         str(row["Hesap_Kodu"]),  # FIX: `row` → row["Hesap_Kodu"]
+            "Ticari Hacim (TL)":                  float(row["Islem_Hacmi"]),
+            "KKB Risk Puanı (0-100)":             default_kkb,
+            "Memzuç Limit/Risk Oranı (0-100)":    default_mem,
+            "Medya/Haber Risk Puanı (0-100)":     default_news,
+        })
+    st.session_state.intelligence_df = pd.DataFrame(intel_records)
+
+edited_intel = st.data_editor(
+    st.session_state.intelligence_df,
+    use_container_width=True,
+    disabled=["Cari Unvanı", "Hesap Tipi", "Ticari Hacim (TL)"],  # FIX: `disabled=` → düzenlenemez sütun listesi
+    column_config={
+        "KKB Risk Puanı (0-100)":          st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d pts"),
+        "Memzuç Limit/Risk Oranı (0-100)": st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d %%"),
+        "Medya/Haber Risk Puanı (0-100)":  st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d pts"),
+        "Ticari Hacim (TL)":               st.column_config.NumberColumn(format="%d TL"),
+    }
+)
+st.session_state.intelligence_df = edited_intel
+
+
+# --- HİBRİT RİSK HESAPLAMA ---
+calculated_records = []  # FIX: `calculated_records =` → boş liste eksikti
+for _, row in edited_intel.iterrows():
+    concentration_ratio = (row["Ticari Hacim (TL)"] / total_mizan_volume) * 100.0  # FIX: `row` → row["Ticari Hacim (TL)"]
+    con_score = min(concentration_ratio * 2.0, 100.0)
+
+    final_risk = (
+        w_kkb  * row["KKB Risk Puanı (0-100)"] +           # FIX: `row` → ilgili sütun adları
+        w_mem  * row["Memzuç Limit/Risk Oranı (0-100)"] +
+        w_news * row["Medya/Haber Risk Puanı (0-100)"] +
+        w_con  * con_score
     )
-    risk_alpha = st.slider("GNN Komşuluk Risk Aktarım Katsayısı (α):", 0.1, 0.9, 0.5)
 
-with col_ctrl2:
-    st.subheader("🟢 Louvain & RFM Pazarlama Hedeflemesi")
-    marketing_focus = st.checkbox("Sadece En Güvenli ve Ticaret Hacmi Yüksek Pazarlama Kümesini Göster", value=False)
-    st.write("Sistem, Louvain topluluk tespiti ile fiktif sektör tanımlarını aşarak gerçek ticaret kümesini bulur.")
+    calculated_records.append({
+        "Firma":                  row["Cari Unvanı"],
+        "Hesap Tipi":             row["Hesap Tipi"],          # FIX: `row` → row["Hesap Tipi"]
+        "Hacim":                  row["Ticari Hacim (TL)"],   # FIX: `row` → row["Ticari Hacim (TL)"]
+        "Konsantrasyon (%)":      round(concentration_ratio, 2),
+        "Konsantrasyon Skoru":    round(con_score, 1),
+        "Nihai Risk Skoru (%)":   round(final_risk, 1),
+    })
 
-# --- ANALİZ MOTORU ---
+results_df = pd.DataFrame(calculated_records)
+
+
+# --- İNTERAKTİF EKOSİSTEM HARİTASI ---
+st.subheader("🌐 Canlı Etkileşimli B2B Ekosistem Grafik Haritası")
+st.caption("Müşteri mizanından çıkan ticari bağlar. Merkez firmadan müşterilere (Mavi oklar) ve tedarikçilerden merkez firmaya (Gri oklar) giden nakit/hizmet akışları:")
+
 G = nx.DiGraph()
+main_firm = "Merkez_Firma_A"
+G.add_node(main_firm, size=35, color="#2c3e50", title="Analiz Edilen Ana Firma (Merkez_Firma_A)", final_risk=0.0, type="main")
 
-for _, row in st.session_state.muavin_data.iterrows():
-    u = row["Kaynak_Firma"]
-    v = row["Hedef_Firma"]
-    volume = float(row["Borc"] + row["Alacak"])  # FIX: row["Borc"] eksikti
+for _, row in results_df.iterrows():
+    node_name = row["Firma"]
+    risk = row["Nihai Risk Skoru (%)"]  # FIX: `row` → row["Nihai Risk Skoru (%)"]
 
-    G.add_node(u, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
-    G.add_node(v, base_risk=10.0, final_risk=10.0, volume=volume, size=15)
-    G.add_edge(u, v, weight=volume, account_code=row["Hesap_Kodu"])
-
-node_risks = {node: 10.0 for node in G.nodes()}
-if high_risk_node != "Yok":  # FIX: != karakteri bozuktu
-    node_risks[high_risk_node] = 100.0
-    for _ in range(2):
-        temp_risks = node_risks.copy()
-        for node in G.nodes():
-            if node == high_risk_node:
-                continue
-            neighbors = list(G.predecessors(node)) + list(G.successors(node))
-            if neighbors:
-                avg_neighbor_risk = sum(node_risks[n] for n in neighbors) / len(neighbors)
-                temp_risks[node] = (1 - risk_alpha) * node_risks[node] + risk_alpha * avg_neighbor_risk
-        node_risks = temp_risks
-
-communities = {}
-for node in G.nodes():
-    if "Tedarikci" in node or "Sub" in node or "Uretici" in node:
-        communities[node] = "Tedarik Grubu (Küme-1)"
-    elif "Alici" in node or "M" in node or "N" in node:
-        communities[node] = "Alıcı / Müşteri Grubu (Küme-2)"
+    if risk > 60.0:
+        color = "#e74c3c"
+        size  = 30
+    elif risk > 30.0:
+        color = "#f39c12"
+        size  = 24
     else:
-        communities[node] = "Merkez Ticaret Odak Grubu (Küme-3)"
+        color = "#2ecc71"
+        size  = 20
 
-for node in G.nodes():
-    risk_score = node_risks[node]
-    G.nodes[node]["final_risk"] = round(risk_score, 1)
-    G.nodes[node]["community"] = communities.get(node, "Diğer")
+    title_text = (
+        f"Firma: {node_name}<br>"
+        f"Ciro Payı: %{row['Konsantrasyon (%)']}<br>"   # FIX: `row['Konsantrasyon']` → row["Konsantrasyon (%)"]
+        f"Nihai Risk Skoru: %{risk}"
+    )
+    G.add_node(node_name, size=size, color=color, title=title_text, final_risk=risk, type="partner")
 
-    if marketing_focus and risk_score < 30.0 and communities.get(node, "") == "Alıcı / Müşteri Grubu (Küme-2)":
-        G.nodes[node]["color"] = "#2ecc71"
-        G.nodes[node]["size"] = 35
-    elif risk_score > 60.0:
-        G.nodes[node]["color"] = "#e74c3c"
-        G.nodes[node]["size"] = 30
-    elif risk_score > 30.0:
-        G.nodes[node]["color"] = "#f39c12"
-        G.nodes[node]["size"] = 25
+    if "120" in str(row["Hesap Tipi"]):   # FIX: `row` → row["Hesap Tipi"]
+        G.add_edge(main_firm, node_name, weight=row["Hacim"])
     else:
-        G.nodes[node]["color"] = "#3498db"
-        G.nodes[node]["size"] = 20
-
-# --- PYVIS İNTERAKTİF GRAFİK ---
-st.subheader("🌐 Canlı Etkileşimli Ekosistem Grafik Haritası")
-st.caption("Düğümleri sürükleyebilir, üzerlerine gelerek risk skoru ve işlem hacmi gibi anlık GNN çıktılarını inceleyebilirsiniz.")
+        G.add_edge(node_name, main_firm, weight=row["Hacim"])
 
 net = Network(height="450px", width="100%", bgcolor="#ffffff", font_color="#000000", directed=True)
 
 for node, attrs in G.nodes(data=True):
-    title_text = f"Firma: {node}<br>GNN Risk Skoru: %{attrs['final_risk']}<br>Ticaret Kümesi: {attrs['community']}"
-    net.add_node(
-        node,
-        label=node,
-        size=attrs["size"],
-        color=attrs["color"],
-        title=title_text
-    )
+    net.add_node(node, label=node, size=attrs["size"], color=attrs["color"], title=attrs["title"])
 
 for u, v, attrs in G.edges(data=True):
-    edge_label = f"Hesap: {attrs['account_code']} (Hacim: {int(attrs['weight']):,} TL)"
-    net.add_edge(u, v, value=attrs["weight"], title=edge_label, color="#bdc3c7")
+    net.add_edge(u, v, color="#95a5a6", width=2)
 
 net.set_options("""
 var options = {
   "physics": {
     "barnesHut": {
-      "gravitationalConstant": -15000,
-      "centralGravity": 0.3,
-      "springLength": 150
-    },
-    "minVelocity": 0.75
+      "gravitationalConstant": -10000,
+      "centralGravity": 0.25,
+      "springLength": 180
+    }
   }
 }
 """)
@@ -157,39 +198,42 @@ with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
     components.html(html_string, height=480)
     os.unlink(tmp.name)
 
-# --- ALT PANEL ---
+
+# --- ALT PANEL: RAPORLAMA ---
 col_rep1, col_rep2 = st.columns(2)
 
 with col_rep1:
     st.subheader("🚨 GNN Erken Uyarı ve Risk Skor Tablosu")
-    risk_data = [  # FIX: liste başlangıcı ve dict key eksikti
-        {
-            "Firma": node,
-            "Yapay Zeka Risk Skoru (%)": G.nodes[node]["final_risk"],
-            "Bulunduğu Küme": G.nodes[node]["community"]
-        }
-        for node in G.nodes()
-    ]
-    if risk_data:
-        risk_df = pd.DataFrame(risk_data).sort_values(by="Yapay Zeka Risk Skoru (%)", ascending=False)
-        st.dataframe(risk_df, use_container_width=True)
-    else:
-        st.write("Veri yok")
+    # FIX: `results_df]` → köşeli parantez fazlasıydı
+    st.dataframe(
+        results_df.sort_values(by="Nihai Risk Skoru (%)", ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
 
 with col_rep2:
-    st.subheader("🎯 B2B Akıllı Pazarlama ve Hedef Sıcak Kümeler")
-    st.write("Sistem, riskten arındırılmış yüksek hacimli toplulukları pazarlama ekibine doğrudan raporlar:")
+    st.subheader("🎯 Akıllı Pazarlama ve Limit Artırım Kararları")
+    st.write("Sistem, riskten arındırılmış yüksek cirolu/güvenli toplulukları pazarlama ekiplerine otomatik raporlar:")
 
-    marketing_leads = []  # FIX: boş liste eksikti
-    for node in G.nodes():
-        if G.nodes[node]["final_risk"] < 30.0 and G.nodes[node]["community"] == "Alıcı / Müşteri Grubu (Küme-2)":
-            marketing_leads.append({
-                "Önerilen Cari": node,
-                "Risk Seviyesi": "Çok Güvenli",
-                "Öneri Kampanyası": "Tedarikçi Finansmanı & DBS Limit Artırımı"
+    marketing_actions = []  # FIX: `marketing_actions =` → boş liste eksikti
+    for _, row in results_df.iterrows():
+        risk      = row["Nihai Risk Skoru (%)"]   # FIX: `row` → row["Nihai Risk Skoru (%)"]
+        hesap     = str(row["Hesap Tipi"])         # FIX: `row` → row["Hesap Tipi"]
+
+        if risk < 35.0 and "120" in hesap:
+            marketing_actions.append({
+                "Önerilen Firma":   row["Firma"],
+                "Öncelik":          "Yüksek (Güvenli Alıcı)",
+                "Öneri Aksiyonu":   "Çapraz Satış & DBS Limit Artırımı",
+            })
+        elif risk > 60.0:
+            marketing_actions.append({
+                "Önerilen Firma":   row["Firma"],
+                "Öncelik":          "KRİZ ALARMI",
+                "Öneri Aksiyonu":   "Tedarik Risk Azaltma & Alacak Sigortası Talebi",
             })
 
-    if marketing_leads:
-        st.table(pd.DataFrame(marketing_leads))
+    if marketing_actions:
+        st.table(pd.DataFrame(marketing_actions))
     else:
-        st.warning("Seçilen risk parametrelerine göre şu an pazarlama odaklı güvenli küme bulunmamaktadır.")
+        st.info("Aksiyona gerek duyulacak uç değerde bir firma bulunmamaktadır.")
