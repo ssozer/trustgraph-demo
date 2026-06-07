@@ -209,7 +209,16 @@ if uploaded:
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🌍 Ekosistem Simülasyon Odası")
 
-mizan_df = ensure_kolonlar(st.session_state.mizan_data.copy())
+# Eski session_state sürümlerinden gelen eksik kolon sorununu tamamen engelle
+_raw = st.session_state.mizan_data.copy()
+_gerekli = ["Hesap_Kodu","Cari_Unvan","Sektor","Borc_Toplam","Alacak_Toplam"]
+if not all(c in _raw.columns for c in _gerekli):
+    _raw = build_default_mizan()
+if "Bakiye" not in _raw.columns:
+    _raw["Bakiye"] = _raw.apply(hesapla_bakiye, axis=1)
+if "Islem_Hacmi" not in _raw.columns:
+    _raw["Islem_Hacmi"] = _raw["Borc_Toplam"] + _raw["Alacak_Toplam"]
+mizan_df = _raw
 st.session_state.mizan_data = mizan_df.copy()
 
 sectors = sorted(mizan_df["Sektor"].unique().tolist())
