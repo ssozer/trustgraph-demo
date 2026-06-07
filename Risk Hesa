@@ -198,11 +198,24 @@ uploaded = st.sidebar.file_uploader("Excel (.xlsx) Mizan Dosyası", type=["xlsx"
 if uploaded:
     try:
         raw = pd.read_excel(uploaded)
-        raw.columns = ["Hesap_Kodu","Cari_Unvan","Sektor","Borc_Toplam","Alacak_Toplam"]
-        raw = ensure_kolonlar(raw)
-        st.session_state.mizan_data = raw
-        st.session_state.istihbarat = init_istihbarat(raw)
-        st.sidebar.success("✅ Mizan başarıyla yüklendi!")
+        
+        # 1. Senaryo: Sistemden daha önce indirilmiş 7 kolonlu "Tam Mizan" yükleniyorsa
+        if "Islem_Hacmi" in raw.columns and "Bakiye" in raw.columns:
+            st.session_state.mizan_data = raw
+            st.session_state.istihbarat = init_istihbarat(raw)
+            st.sidebar.success("✅ Tam Mizan başarıyla yüklendi!")
+        
+        # 2. Senaryo: Dışarıdan yüklenen ham mizan ise (sadece ilk 5 kolonu al ve formatla)
+        else:
+            if len(raw.columns) >= 5:
+                raw = raw.iloc[:, :5].copy()
+                raw.columns = ["Hesap_Kodu","Cari_Unvan","Sektor","Borc_Toplam","Alacak_Toplam"]
+                raw = ensure_kolonlar(raw)
+                st.session_state.mizan_data = raw
+                st.session_state.istihbarat = init_istihbarat(raw)
+                st.sidebar.success("✅ Yeni Mizan başarıyla yüklendi ve işlendi!")
+            else:
+                st.sidebar.error("⚠️ Hata: Yüklenen mizan dosyası en az 5 kolon içermelidir.")
     except Exception as e:
         st.sidebar.error(f"Dosya okunamadı: {e}")
 
@@ -232,6 +245,9 @@ n_slider = st.sidebar.slider("İstihbarat Matrisi Satır Sayısı (N):", 5, 50, 
 # ══════════════════════════════════════════════════════════════════════════════
 # RISK HESAPLAMA MOTORU
 # ══════════════════════════════════════════════════════════════════════════════
+if "Islem_Hacmi" not in mizan_df.columns:
+    mizan_df = ensure_kolonlar(mizan_df)
+           
 total_hacim = mizan_df["Islem_Hacmi"].sum() or 1.0
 
 partner_risks = {}
