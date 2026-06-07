@@ -72,7 +72,6 @@ KELIMELER = [
 ]
 UNVANLAR = ["A.Ş.","Ltd. Şti.","San. A.Ş.","Tic. Ltd.","Holding A.Ş.","San. ve Tic. A.Ş.","Koll. Şti."]
 
-# Sektör → (hesap_prefix, borç_mu)
 SEKTORLER = {
     "İnşaat":    ("120", True),
     "Tekstil":   ("120", True),
@@ -152,9 +151,11 @@ def hesapla_bakiye(row):
     return abs(row["Borc_Toplam"] - row["Alacak_Toplam"])
 
 def ensure_kolonlar(df):
-    if "Bakiye" not in df.columns:
+    # Kolonları güvenliğe al
+    mevcut_kolonlar = df.columns.tolist()
+    if "Bakiye" not in mevcut_kolonlar:
         df["Bakiye"] = df.apply(hesapla_bakiye, axis=1)
-    if "Islem_Hacmi" not in df.columns:
+    if "Islem_Hacmi" not in mevcut_kolonlar:
         df["Islem_Hacmi"] = df["Borc_Toplam"] + df["Alacak_Toplam"]
     return df
 
@@ -172,10 +173,14 @@ if "mizan_data" not in st.session_state:
 
 def init_istihbarat(mizan_df, n=10):
     random.seed(99)
-    firmalar = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(("120","320"))].head(n).copy()
+    # KeyError koruması
+    cari_col = "Cari_Unvan" if "Cari_Unvan" in mizan_df.columns else mizan_df.columns[1]
+    hkod_col = "Hesap_Kodu" if "Hesap_Kodu" in mizan_df.columns else mizan_df.columns[0]
+    
+    firmalar = mizan_df[mizan_df[hkod_col].astype(str).str.startswith(("120","320"))].head(n).copy()
     n_actual = len(firmalar)
     return pd.DataFrame({
-        "Cari Unvanı":                   firmalar["Cari_Unvan"].values,
+        "Cari Unvanı":                   firmalar[cari_col].values,
         "KKB Ticari Kredi Notu (TKN)":   [random.randint(400,1000) for _ in range(n_actual)],
         "Ticari Borçluluk Endeksi (TBE)":[random.randint(10,90)    for _ in range(n_actual)],
         "Medya/Haber Olumsuzluk Skoru":  [random.randint(0,80)     for _ in range(n_actual)],
@@ -199,13 +204,11 @@ if uploaded:
     try:
         raw = pd.read_excel(uploaded)
         
-        # 1. Senaryo: Sistemden daha önce indirilmiş 7 kolonlu "Tam Mizan" yükleniyorsa
+        # Kolon sayısı esnekliği eklendi
         if "Islem_Hacmi" in raw.columns and "Bakiye" in raw.columns:
             st.session_state.mizan_data = raw
             st.session_state.istihbarat = init_istihbarat(raw)
             st.sidebar.success("✅ Tam Mizan başarıyla yüklendi!")
-        
-        # 2. Senaryo: Dışarıdan yüklenen ham mizan ise (sadece ilk 5 kolonu al ve formatla)
         else:
             if len(raw.columns) >= 5:
                 raw = raw.iloc[:, :5].copy()
@@ -222,19 +225,16 @@ if uploaded:
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🌍 Ekosistem Simülasyon Odası")
 
-# Eski session_state sürümlerinden gelen eksik kolon sorununu tamamen engelle
-_raw = st.session_state.mizan_data.copy()
-_gerekli = ["Hesap_Kodu","Cari_Unvan","Sektor","Borc_Toplam","Alacak_Toplam"]
-if not all(c in _raw.columns for c in _gerekli):
-    _raw = build_default_mizan()
-if "Bakiye" not in _raw.columns:
-    _raw["Bakiye"] = _raw.apply(hesapla_bakiye, axis=1)
-if "Islem_Hacmi" not in _raw.columns:
-    _raw["Islem_Hacmi"] = _raw["Borc_Toplam"] + _raw["Alacak_Toplam"]
-mizan_df = _raw
+mizan_df = ensure_kolonlar(st.session_state.mizan_data.copy())
 st.session_state.mizan_data = mizan_df.copy()
 
-sectors = sorted(mizan_df["Sektor"].unique().tolist())
+# Güvenli sektör okuması
+sektor_col = "Sektor" if "Sektor" in mizan_df.columns else ("Sektör" if "Sektör" in mizan_df.columns else None)
+if sektor_col:
+    sectors = sorted(mizan_df[sektor_col].dropna().unique().tolist())
+else:
+    sectors = []
+
 selected_sector = st.sidebar.selectbox("Krize Girecek Sektör:", ["(Seçilmedi)"] + sectors)
 shock_intensity = st.sidebar.slider("Sektörel Kriz Şiddeti (%):", 0, 100, 0)
 alpha           = st.sidebar.slider("Risk Bulaşma Katsayısı (α):", 0.1, 1.0, 0.5, 0.05)
@@ -245,20 +245,19 @@ n_slider = st.sidebar.slider("İstihbarat Matrisi Satır Sayısı (N):", 5, 50, 
 # ══════════════════════════════════════════════════════════════════════════════
 # RISK HESAPLAMA MOTORU
 # ══════════════════════════════════════════════════════════════════════════════
-if "Islem_Hacmi" not in mizan_df.columns:
-    mizan_df = ensure_kolonlar(mizan_df)
-           
 total_hacim = mizan_df["Islem_Hacmi"].sum() or 1.0
 
 partner_risks = {}
 for _, row in mizan_df.iterrows():
     base = 15.0
-    if row["Sektor"] == selected_sector:
+    r_sektor = row.get("Sektor", row.get("Sektör", ""))
+    r_unvan = row.get("Cari_Unvan", "Bilinmiyor")
+    if r_sektor == selected_sector:
         base = float(shock_intensity)
-    partner_risks[row["Cari_Unvan"]] = base
+    partner_risks[r_unvan] = base
 
 bulaşma = sum(
-    partner_risks[r["Cari_Unvan"]] * (r["Islem_Hacmi"] / total_hacim)
+    partner_risks.get(r.get("Cari_Unvan", "Bilinmiyor"), 15.0) * (r.get("Islem_Hacmi", 0) / total_hacim)
     for _, r in mizan_df.iterrows()
 ) * alpha
 merkez_risk = min(round(bulaşma, 1), 100.0)
@@ -285,14 +284,15 @@ with tab1:
           <div class="metric-sub">GNN Message Passing · α={alpha}</div>
         </div>""", unsafe_allow_html=True)
     with c2:
-        partner_count = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(("120","320"))].shape[0]
+        hkod_col = "Hesap_Kodu" if "Hesap_Kodu" in mizan_df.columns else mizan_df.columns[0]
+        partner_count = mizan_df[mizan_df[hkod_col].astype(str).str.startswith(("120","320"))].shape[0]
         st.markdown(f"""<div class="metric-card">
           <div class="metric-title">Aktif Partner Sayısı</div>
           <div class="metric-value">{partner_count:,}</div>
           <div class="metric-sub">Alıcı + Tedarikçi</div>
         </div>""", unsafe_allow_html=True)
     with c3:
-        etkilenen = mizan_df[mizan_df["Sektor"] == selected_sector].shape[0] if selected_sector != "(Seçilmedi)" else 0
+        etkilenen = mizan_df[mizan_df.get("Sektor", mizan_df.get("Sektör")) == selected_sector].shape[0] if selected_sector != "(Seçilmedi)" else 0
         st.markdown(f"""<div class="metric-card {'warning' if etkilenen > 0 else ''}">
           <div class="metric-title">Şoktan Etkilenen Partner</div>
           <div class="metric-value">{etkilenen:,}</div>
@@ -307,12 +307,13 @@ with tab1:
 
     st.markdown('<div class="section-header">🌐 Canlı Etkileşimli B2B Ekosistem Grafik Haritası</div>', unsafe_allow_html=True)
 
-    # Grafik için örnekleme — max 80 düğüm göster (performans)
     st.caption("Grafik okunabilirlik için sektör bazlı örneklenmiş 80 partner gösterilmektedir. Tüm hesaplamalar tam veri setinde yapılır.")
-    graf_df = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(("120","320"))]
-    if len(graf_df) > 80:
-        graf_df = graf_df.groupby("Sektor", group_keys=False).apply(
-            lambda x: x.sample(min(len(x), max(1, 80 // mizan_df["Sektor"].nunique())), random_state=42)
+    graf_df = mizan_df[mizan_df[hkod_col].astype(str).str.startswith(("120","320"))]
+    
+    # Güvenli groupby
+    if len(graf_df) > 80 and sektor_col in graf_df.columns:
+        graf_df = graf_df.groupby(sektor_col, group_keys=False).apply(
+            lambda x: x.sample(min(len(x), max(1, 80 // mizan_df[sektor_col].nunique())), random_state=42)
         ).head(80)
 
     G = nx.DiGraph()
@@ -323,21 +324,29 @@ with tab1:
 
     max_hacim = graf_df["Islem_Hacmi"].max() or 1.0
     for _, row in graf_df.iterrows():
-        name  = row["Cari_Unvan"]
+        # Get() ile KeyError güvenlik ağı eklendi
+        name  = row.get("Cari_Unvan", "Bilinmiyor")
         risk  = partner_risks.get(name, 15.0)
-        cpct  = round(row["Islem_Hacmi"] / total_hacim * 100, 2)
-        size  = 12 + int((row["Islem_Hacmi"] / max_hacim) * 22)
+        hacim = row.get("Islem_Hacmi", 0)
+        cpct  = round((hacim / total_hacim) * 100, 2)
+        size  = 12 + int((hacim / max_hacim) * 22)
         color = "#e74c3c" if risk > 60 else ("#f39c12" if risk > 30 else "#27ae60")
-        tip   = f"<b>{name}</b><br>Sektör: {row['Sektor']}<br>Ciro Payı: %{cpct}<br>Risk: %{risk}"
+        
+        # Sektor anahtarı için güvenli getirme
+        sektor_val = row.get("Sektor", row.get("Sektör", "Bilinmiyor"))
+        
+        tip   = f"<b>{name}</b><br>Sektör: {sektor_val}<br>Ciro Payı: %{cpct}<br>Risk: %{risk}"
         G.add_node(name, size=size, color=color, title=tip)
-        if str(row["Hesap_Kodu"]).startswith("120"):
+        
+        kod_val = str(row.get("Hesap_Kodu", row.get(hkod_col, "")))
+        if kod_val.startswith("120"):
             G.add_edge(main_firm, name)
         else:
             G.add_edge(name, main_firm)
 
     net = Network(height="520px", width="100%", bgcolor="#f8fafc", font_color="#1a2342", directed=True)
     for node, attrs in G.nodes(data=True):
-        net.add_node(node, label=node, size=attrs["size"], color=attrs["color"], title=attrs["title"])
+        net.add_node(node, label=node, size=attrs.get("size", 10), color=attrs.get("color", "#000"), title=attrs.get("title", ""))
     for u, v in G.edges():
         net.add_edge(u, v, color="#94a3b8", width=1, arrows="to")
     net.set_options("""
@@ -369,21 +378,23 @@ with tab1:
     # Sektör bazlı özet
     st.markdown('<div class="section-header">📊 Sektör Bazlı Risk Özeti</div>', unsafe_allow_html=True)
     sektor_ozet = []
-    for sek in sectors:
-        sek_df = mizan_df[mizan_df["Sektor"] == sek]
-        sek_hacim = sek_df["Islem_Hacmi"].sum()
-        sek_risk  = partner_risks.get(sek_df["Cari_Unvan"].iloc[0], 15.0) if len(sek_df) > 0 else 15.0
-        sektor_ozet.append({
-            "Sektör":           sek,
-            "Firma Sayısı":     len(sek_df),
-            "Toplam Hacim (TL)":int(sek_hacim),
-            "Hacim Payı (%)":   round(sek_hacim / total_hacim * 100, 2),
-            "Sektör Risk (%)":  float(shock_intensity) if sek == selected_sector else 15.0,
-        })
-    st.dataframe(
-        pd.DataFrame(sektor_ozet).sort_values("Toplam Hacim (TL)", ascending=False),
-        use_container_width=True, hide_index=True
-    )
+    if sektor_col:
+        for sek in sectors:
+            sek_df = mizan_df[mizan_df[sektor_col] == sek]
+            sek_hacim = sek_df["Islem_Hacmi"].sum()
+            sek_risk  = partner_risks.get(sek_df.get("Cari_Unvan", pd.Series([""])).iloc[0], 15.0) if len(sek_df) > 0 else 15.0
+            sektor_ozet.append({
+                "Sektör":           sek,
+                "Firma Sayısı":     len(sek_df),
+                "Toplam Hacim (TL)":int(sek_hacim),
+                "Hacim Payı (%)":   round(sek_hacim / total_hacim * 100, 2) if total_hacim > 0 else 0,
+                "Sektör Risk (%)":  float(shock_intensity) if sek == selected_sector else 15.0,
+            })
+        if sektor_ozet:
+            st.dataframe(
+                pd.DataFrame(sektor_ozet).sort_values("Toplam Hacim (TL)", ascending=False),
+                use_container_width=True, hide_index=True
+            )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SEKME 2
@@ -397,12 +408,29 @@ with tab2:
         # Sektör filtresi
         fil_sektor = st.multiselect("Sektöre göre filtrele:", options=sectors, default=[])
         show_df = mizan_df.copy()
-        if fil_sektor:
-            show_df = show_df[show_df["Sektor"].isin(fil_sektor)]
+        if fil_sektor and sektor_col:
+            show_df = show_df[show_df[sektor_col].isin(fil_sektor)]
 
         st.caption(f"Toplam {len(show_df):,} kayıt gösteriliyor.")
-        disp = show_df[["Hesap_Kodu","Cari_Unvan","Sektor","Borc_Toplam","Alacak_Toplam","Bakiye","Islem_Hacmi"]].copy()
-        disp.columns = ["Hesap Kodu","Cari Unvanı","Sektör","Borç (TL)","Alacak (TL)","Bakiye (TL)","İşlem Hacmi (TL)"]
+        
+        # Display tablosunu güvenli oluşturma
+        disp_cols = []
+        for c in ["Hesap_Kodu", "Cari_Unvan", "Sektor", "Borc_Toplam", "Alacak_Toplam", "Bakiye", "Islem_Hacmi"]:
+            if c in show_df.columns:
+                disp_cols.append(c)
+            elif c == "Sektor" and "Sektör" in show_df.columns:
+                disp_cols.append("Sektör")
+        
+        disp = show_df[disp_cols].copy()
+        
+        # Sütun isimlerini arayüz için güzelleştirme
+        rename_map = {
+            "Hesap_Kodu": "Hesap Kodu", "Cari_Unvan": "Cari Unvanı", "Sektor": "Sektör",
+            "Borc_Toplam": "Borç (TL)", "Alacak_Toplam": "Alacak (TL)",
+            "Bakiye": "Bakiye (TL)", "Islem_Hacmi": "İşlem Hacmi (TL)"
+        }
+        disp.rename(columns=rename_map, inplace=True)
+        
         st.dataframe(disp.style.format({
             "Borç (TL)":        "{:,.0f}",
             "Alacak (TL)":      "{:,.0f}",
@@ -410,8 +438,8 @@ with tab2:
             "İşlem Hacmi (TL)": "{:,.0f}",
         }), use_container_width=True, hide_index=True, height=420)
 
-        aktif = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(AKTIF_PREFIXLER)]["Bakiye"].sum()
-        pasif = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(PASIF_PREFIXLER)]["Bakiye"].sum()
+        aktif = mizan_df[mizan_df[hkod_col].astype(str).str.startswith(AKTIF_PREFIXLER)]["Bakiye"].sum()
+        pasif = mizan_df[mizan_df[hkod_col].astype(str).str.startswith(PASIF_PREFIXLER)]["Bakiye"].sum()
         mc1, mc2, mc3 = st.columns(3)
         with mc1:
             st.markdown(f"""<div class="metric-card success">
@@ -525,15 +553,18 @@ with tab3:
     st.markdown('<div class="section-header">🎯 Modül 4 — Gelişmiş Çapraz Satış Tetikleyicileri (Kebir Hesap Analizi)</div>', unsafe_allow_html=True)
     triggers = []
 
-    personel = mdf[mdf["Hesap_Kodu"].str.startswith("335")]["Bakiye"].sum()
+    # Güvenli kod araması
+    mkod = "Hesap_Kodu" if "Hesap_Kodu" in mdf.columns else mdf.columns[0]
+    
+    personel = mdf[mdf[mkod].astype(str).str.startswith("335")]["Bakiye"].sum()
     if personel > 200_000:
         triggers.append({"Hesap Grubu":"335 — Personel Maaşları",
             "Tespit":f"Yüksek maaş borcu: ₺{personel:,.0f}",
             "Öneri/Aksiyon":"💼 Maaş Ödemesi Protokolü Teklifi + Çalışanlara Bireysel Kredi/Kart Satışı",
             "Öncelik":"🔴 Yüksek"})
 
-    cek_bakiye = mdf[mdf["Hesap_Kodu"].str.startswith("101")]["Bakiye"].sum()
-    alan_120   = mdf[mdf["Hesap_Kodu"].str.startswith("120")]["Bakiye"].sum() or 1.0
+    cek_bakiye = mdf[mdf[mkod].astype(str).str.startswith("101")]["Bakiye"].sum()
+    alan_120   = mdf[mdf[mkod].astype(str).str.startswith("120")]["Bakiye"].sum() or 1.0
     cek_oran   = cek_bakiye / alan_120
     if cek_oran > 0.30:
         triggers.append({"Hesap Grubu":"101 — Tahsil Edilecek Çekler",
@@ -541,22 +572,22 @@ with tab3:
             "Öneri/Aksiyon":"✂️ Çek İskonto (Kırma) ve Tahsilat Finansmanı Teklifi",
             "Öncelik":"🟠 Orta"})
 
-    rakip_mevduat = mdf[mdf["Hesap_Kodu"].str.startswith("102")]["Bakiye"].sum()
+    rakip_mevduat = mdf[mdf[mkod].astype(str).str.startswith("102")]["Bakiye"].sum()
     if rakip_mevduat > 0:
         triggers.append({"Hesap Grubu":"102 — Diğer Banka Mevduatları",
             "Tespit":f"Rakip bankadaki mevduat: ₺{rakip_mevduat:,.0f}",
             "Öneri/Aksiyon":"🏦 Mevduat ve POS Payı Kapma Kampanyası",
             "Öncelik":"🟠 Orta"})
 
-    stok = mdf[mdf["Hesap_Kodu"].str.startswith("153")]["Bakiye"].sum()
+    stok = mdf[mdf[mkod].astype(str).str.startswith("153")]["Bakiye"].sum()
     if stok > 300_000:
         triggers.append({"Hesap Grubu":"153 — Depodaki Ticari Mallar",
             "Tespit":f"Yüksek stok hacmi: ₺{stok:,.0f}",
             "Öneri/Aksiyon":"📦 Stok Teminatlı İşletme Sermayesi Kredisi Önerisi",
             "Öncelik":"🟢 Standart"})
 
-    ihracat      = mdf[mdf["Hesap_Kodu"].str.startswith("601")]["Bakiye"].sum()
-    toplam_satis = mdf[mdf["Hesap_Kodu"].str.startswith(("600","601"))]["Bakiye"].sum() or 1.0
+    ihracat      = mdf[mdf[mkod].astype(str).str.startswith("601")]["Bakiye"].sum()
+    toplam_satis = mdf[mdf[mkod].astype(str).str.startswith(("600","601"))]["Bakiye"].sum() or 1.0
     ihracat_oran = ihracat / toplam_satis
     if ihracat_oran >= 0.20:
         triggers.append({"Hesap Grubu":"601 — Yurtdışı İhracat Gelirleri",
