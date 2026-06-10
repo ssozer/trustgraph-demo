@@ -372,11 +372,13 @@ with tab1:
     st.markdown('<div class="section-header">🌐 Canlı 2-Hop B2B Ekosistem Grafik Haritası</div>', unsafe_allow_html=True)
     st.caption("Mor kenarlar 2. seviye (dolaylı) bağlantıları gösterir. Kırmızı halka = Sistemik Aktör. Grafik okunabilirlik için örneklenmiş 80 1.seviye partner içerir.")
 
-    graf_df = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(("120","320"))]
+    graf_df = mizan_df[mizan_df["Hesap_Kodu"].str.startswith(("120","320"))].reset_index(drop=True)
     if len(graf_df) > 80:
+        n_sek = max(1, mizan_df["Sektor"].nunique())
         graf_df = (
             graf_df.groupby("Sektor", group_keys=False)
-            .apply(lambda x: x.sample(min(len(x), max(1, 80 // mizan_df["Sektor"].nunique())), random_state=42))
+            .apply(lambda x: x.sample(min(len(x), max(1, 80 // n_sek)), random_state=42))
+            .reset_index(drop=True)
             .head(80)
         )
 
