@@ -1,4 +1,3 @@
-python
 import streamlit as st
 import networkx as nx
 from pyvis.network import Network
@@ -432,5 +431,3 @@ with tab3:
         st.dataframe(pd.DataFrame(triggers), use_container_width=True, hide_index=True)
     else:
         st.success("Tetikleyici bulunamadı.")
-
-```
