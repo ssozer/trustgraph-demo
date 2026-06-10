@@ -23,13 +23,14 @@ st.markdown("""
     .stTabs [aria-selected="true"] { background: #2563eb !important; color: white !important; }
     .metric-card { background: white; border-radius: 12px; padding: 18px 22px; border-left: 5px solid #2563eb;
         box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom: 12px; }
-    .metric-card.danger  { border-left-color: #ef4444; }
-    .metric-card.warning { border-left-color: #f59e0b; }
+    .metric-card.danger  { border-left-color: #ef4444; background-color: #fef2f2;}
+    .metric-card.warning { border-left-color: #f59e0b; background-color: #fffbeb;}
     .metric-card.success { border-left-color: #10b981; }
-    .metric-card.purple  { border-left-color: #8b5cf6; }
-    .metric-title { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-    .metric-value { font-size: 24px; font-weight: 700; color: #0f172a; margin-top: 4px; }
-    .metric-sub   { font-size: 12px; color: #94a3b8; margin-top: 4px; font-weight: 500;}
+    .metric-card.purple  { border-left-color: #8b5cf6; background-color: #f5f3ff;}
+    .metric-card.blue    { border-left-color: #3b82f6; background-color: #eff6ff;}
+    .metric-title { font-size: 12px; color: #475569; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 4px; }
+    .metric-sub   { font-size: 12px; color: #64748b; margin-top: 4px; font-weight: 500;}
     .section-header { font-size: 16px; font-weight: 700; color: #0f172a;
         border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 16px; margin-top: 24px; }
     .header-banner { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
@@ -114,19 +115,16 @@ def init_istihbarat(mizan_df, n=15):
         ciro_list.append(ciro)
         
         unvan = str(row.get("Cari_Unvan", ""))
-        # Sektörel / Unvan bazlı risk belirleme
         if "Çelik" in unvan or "Taşeron" in unvan or "Hafriyat" in unvan:
             kkb = random.randint(400, 550)
-            sigorta = random.choice([0, 0, 10, 20]) # Teminatı yok ya da çok zayıf
+            sigorta = random.choice([0, 0, 10, 20])
         else:
             kkb = random.randint(700, 900)
-            sigorta = random.choice([50, 70, 80, 100]) # Güçlü teminat
+            sigorta = random.choice([50, 70, 80, 100])
             
         tkn_list.append(kkb)
         sigorta_list.append(sigorta)
         
-        # FIRMA BAZLI İFLAS EŞİĞİ (Direnç) HESABI: KKB ile doğru orantılı
-        # Örnek: KKB 900 -> %55 direnebilir. KKB 400 -> %20'de batar.
         esik = int(max(15, min(65, (kkb / 1000) * 60)))
         esik_list.append(esik)
 
@@ -181,14 +179,21 @@ firma_listesi = ["(Seçiniz)"] + ist_df["Cari Unvanı"].tolist() if not ist_df.e
 krize_giren = st.sidebar.selectbox("Şok Yiyecek (Temerrüt) Firma:", firma_listesi)
 
 st.sidebar.info("""💡 **Dinamik Ağ Algoritması:**
-Her firmanın dayanıklılığı **KENDİ** KKB notuna ve Teminat gücüne göre ayrı ayrı hesaplanır. Global sabitler kullanılmaz.""")
+Her firmanın dayanıklılığı KENDİ KKB notuna ve Teminat gücüne göre ayrı ayrı hesaplanır. Ana müşterimiz ise kendi yüksek işlem hacmine ve teminatına göre korunur.""")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DİNAMİK SİMÜLASYON MOTORU (FİRMA SPESİFİK PARAMETRELERLE)
+# DİNAMİK SİMÜLASYON MOTORU
 # ══════════════════════════════════════════════════════════════════════════════
 mizan_df = st.session_state.mizan_data
 node_status = {}
 banka_kredi_riski = 0.0
+
+toplam_ticaret_hacmi = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith(("120","320"))]["Islem_Hacmi"].sum() if "Islem_Hacmi" in mizan_df.columns else 0
+merkez_bakiye_ciro = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith(("600","601"))]["Bakiye"].sum() if "Bakiye" in mizan_df.columns else 0
+gercekci_merkez_ciro = max(merkez_bakiye_ciro, toplam_ticaret_hacmi * 1.5)
+if gercekci_merkez_ciro == 0: gercekci_merkez_ciro = 100_000_000
+
+node_status["ANA_MUSTERIMIZ"] = {"kkb": 750, "teminat": 50, "esik": 50, "ciro": gercekci_merkez_ciro, "kredi_riski": 0, "hasar_orani": 0.0, "durum": "Safe", "sebep": ""}
 
 for _, row in ist_df.iterrows():
     unvan = row.get("Cari Unvanı", "Bilinmeyen")
@@ -197,7 +202,6 @@ for _, row in ist_df.iterrows():
     ciro = max(pd.to_numeric(row.get("Tahmini Yıllık Ciro (TL)", hacim * 2), errors='coerce') or hacim * 2, hacim * 1.1)
     kredi_limit = ciro * 0.15 
     
-    # Firma Spesifik Parametreleri İstihbarat Matrisinden Çekiyoruz
     kkb_val = pd.to_numeric(row.get("KKB Ticari Kredi Notu (TKN)", 500), errors='coerce') or 500
     teminat_val = pd.to_numeric(row.get("Teminat/Sigorta Kapsamı (%)", 0), errors='coerce') or 0
     esik_val = pd.to_numeric(row.get("Bilanço Direnci / İflas Eşiği (%)", 40), errors='coerce') or 40
@@ -208,24 +212,22 @@ for _, row in ist_df.iterrows():
     }
     banka_kredi_riski += kredi_limit
 
-merkez_ciro = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith(("600","601"))]["Bakiye"].sum() if "Bakiye" in mizan_df.columns else 100_000_000
-if merkez_ciro == 0: merkez_ciro = 100_000_000
-node_status["ANA_MUSTERIMIZ"] = {"kkb": 750, "teminat": 100, "esik": 50, "ciro": merkez_ciro, "kredi_riski": 0, "hasar_orani": 0.0, "durum": "Safe", "sebep": ""}
-
+# YENİ DEĞİŞKENLER: Tekil NPL ve Toplam NPL Kıyaslaması İçin
+tekil_npl = 0.0
 npl_beklentisi = 0.0
 
 if krize_giren != "(Seçiniz)" and krize_giren in node_status:
     node_status[krize_giren]["hasar_orani"] = 100.0
     node_status[krize_giren]["durum"] = "Failed"
-    npl_beklentisi += node_status[krize_giren]["kredi_riski"]
     
-    # 1. Dalga
+    tekil_npl = node_status[krize_giren]["kredi_riski"]
+    npl_beklentisi += tekil_npl
+    
     batan_ile_hacim = node_status[krize_giren]["hacim_bizimle"]
     bagimlilik = batan_ile_hacim / node_status["ANA_MUSTERIMIZ"]["ciro"]
-    # Merkez müşterimizin teminat koruması batan firmaya özel
-    merkez_hasar_katsayisi = (100 - node_status[krize_giren]["teminat"])/100.0 
     
-    ana_hasar = (100.0 * bagimlilik * ((1000 - 750)/400.0) * merkez_hasar_katsayisi)
+    merkez_hasar_katsayisi = (100 - node_status["ANA_MUSTERIMIZ"]["teminat"]) / 100.0 
+    ana_hasar = (100.0 * bagimlilik * ((1000 - node_status["ANA_MUSTERIMIZ"]["kkb"]) / 400.0) * merkez_hasar_katsayisi)
     node_status["ANA_MUSTERIMIZ"]["hasar_orani"] += ana_hasar
     
     if node_status["ANA_MUSTERIMIZ"]["hasar_orani"] >= node_status["ANA_MUSTERIMIZ"]["esik"]: 
@@ -233,24 +235,23 @@ if krize_giren != "(Seçiniz)" and krize_giren in node_status:
     elif node_status["ANA_MUSTERIMIZ"]["hasar_orani"] >= (node_status["ANA_MUSTERIMIZ"]["esik"]/2): 
         node_status["ANA_MUSTERIMIZ"]["durum"] = "Warning"
 
-    # 2. Dalga (Ağ Bulaşması)
     for diger_firma in node_status:
         if diger_firma not in ["ANA_MUSTERIMIZ", krize_giren]:
-            if random.random() < 0.35: # Ekosistem ticaret ihtimali
+            if random.random() < 0.35: 
                 d_bagimlilik = (node_status[diger_firma]["ciro"] * random.uniform(0.1, 0.5)) / node_status[diger_firma]["ciro"]
                 d_kkb_kirilganlik = max(0.1, (1000 - node_status[diger_firma]["kkb"]) / 400.0)
-                
-                # FİRMA KENDİ TEMİNAT ORANIYLA KORUNUR
                 d_teminat_katsayisi = (100 - node_status[diger_firma]["teminat"])/100.0
                 
                 node_status[diger_firma]["hasar_orani"] += (100.0 * d_bagimlilik * d_kkb_kirilganlik * d_teminat_katsayisi)
                 
-                # FİRMA KENDİ BİLANÇO DİRENCİ (EŞİĞİ) ÜZERİNDEN BATAR
                 if node_status[diger_firma]["hasar_orani"] >= node_status[diger_firma]["esik"]:
                     node_status[diger_firma]["durum"] = "Failed"
                     npl_beklentisi += node_status[diger_firma]["kredi_riski"]
                 elif node_status[diger_firma]["hasar_orani"] >= (node_status[diger_firma]["esik"]/2):
                     node_status[diger_firma]["durum"] = "Warning"
+
+# Kurtarılan Gizli Risk Hesaplaması
+gizli_risk = npl_beklentisi - tekil_npl if npl_beklentisi > tekil_npl else 0.0
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SEKMELER (TABS)
@@ -262,21 +263,39 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 1: SİMÜLASYON
+# TAB 1: SİMÜLASYON (GÜNCELLENMİŞ METRİK KARTLARI)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 with tab1:
+    # 4 KOLONLU YENİ METRİK DÜZENİ (HİKAYEYE GÖRE)
     c1, c2, c3, c4 = st.columns(4)
-    batan_sayisi = sum(1 for k, v in node_status.items() if v["durum"] == "Failed" and k != "ANA_MUSTERIMIZ")
-    npl_oran = (npl_beklentisi / banka_kredi_riski * 100) if banka_kredi_riski > 0 else 0
     
-    with c1: st.markdown(f"""<div class="metric-card purple"><div class="metric-title">Toplam Ekosistem Hacmi</div><div class="metric-value">₺{sum(v['ciro'] for v in node_status.values())/1e6:.0f}M</div></div>""", unsafe_allow_html=True)
-    with c2: st.markdown(f"""<div class="metric-card success"><div class="metric-title">Banka Toplam Kredi Riski</div><div class="metric-value">₺{banka_kredi_riski/1e6:.1f}M</div></div>""", unsafe_allow_html=True)
+    with c1: 
+        st.markdown(f"""<div class="metric-card blue">
+          <div class="metric-title">Banka Toplam Kredi Riski</div>
+          <div class="metric-value">₺{banka_kredi_riski/1e6:.1f}M</div>
+          <div class="metric-sub">Tüm Ekosistem Limiti</div>
+        </div>""", unsafe_allow_html=True)
+        
+    with c2: 
+        st.markdown(f"""<div class="metric-card warning">
+          <div class="metric-title">Tekil NPL (Geleneksel Yöntem)</div>
+          <div class="metric-value">₺{tekil_npl/1e6:.1f}M</div>
+          <div class="metric-sub">Sadece Tetiklenen Firma Riski</div>
+        </div>""", unsafe_allow_html=True)
+        
     with c3:
-        cls_bat = "danger" if batan_sayisi > 0 else "success"
-        st.markdown(f"""<div class="metric-card {cls_bat}"><div class="metric-title">Batan Partner Sayısı</div><div class="metric-value">{batan_sayisi}</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card danger">
+          <div class="metric-title">TrustGraph Domino NPL</div>
+          <div class="metric-value">₺{npl_beklentisi/1e6:.1f}M</div>
+          <div class="metric-sub">Tüm Zincirleme Batanlar Toplamı</div>
+        </div>""", unsafe_allow_html=True)
+        
     with c4:
-        cls_npl = "danger" if npl_oran > 15 else ("warning" if npl_oran > 0 else "success")
-        st.markdown(f"""<div class="metric-card {cls_npl}"><div class="metric-title">NPL (Batık) Beklentisi</div><div class="metric-value">₺{npl_beklentisi/1e6:.1f}M</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card purple">
+          <div class="metric-title">💡 Yakalanan Gizli Risk</div>
+          <div class="metric-value">₺{gizli_risk/1e6:.1f}M</div>
+          <div class="metric-sub">Geleneksel Modelin Göremediği Fark</div>
+        </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="section-header">🕸️ Dinamik Tedarik Zinciri Ağ Haritası</div>', unsafe_allow_html=True)
     st.caption("Not: Her firmanın balonu üzerine fareyle geldiğinizde, firmaya özel İflas Eşiğini ve Teminat gücünü görebilirsiniz.")
@@ -290,7 +309,6 @@ with tab1:
         color = "#ef4444" if data["durum"]=="Failed" else ("#f59e0b" if data["durum"]=="Warning" else "#10b981")
         size = max(15, min(35, int((data["kredi_riski"]/5_000_000)*10) + 15))
         
-        # Tooltip'e spesifik özellikleri ekledik
         tooltip = (f"<b>{unvan}</b><br>KKB Notu: {data['kkb']}<br>"
                    f"Teminat Koruma Oranı: %{data['teminat']}<br>"
                    f"Kırılma (İflas) Eşiği: %{data['esik']}<br>---<br>"
@@ -320,17 +338,15 @@ with tab2:
         st.dataframe(show_df, use_container_width=True, hide_index=True, height=450)
     with col_r:
         st.markdown('<div class="section-header">🔬 İnteraktif İstihbarat Matrisi (Firma Spesifik Parametreler)</div>', unsafe_allow_html=True)
-        st.caption("Buradaki İflas Eşiği ve Teminat Kapsamı, Tab 1'deki iflas simülasyonunu *her firma için ayrı ayrı* etkiler.")
         
-        # Sütun tiplerini ayarlıyoruz
         edited = st.data_editor(
             st.session_state.istihbarat,
             use_container_width=True, hide_index=True, height=450,
             column_config={
                 "Cari Unvanı": st.column_config.TextColumn(disabled=True),
                 "KKB Ticari Kredi Notu (TKN)": st.column_config.NumberColumn(min_value=0, max_value=1000),
-                "Bilanço Direnci / İflas Eşiği (%)": st.column_config.NumberColumn(min_value=5, max_value=100, help="Firma cirosunun % kaçı kadar hasar alırsa iflas eder?"),
-                "Teminat/Sigorta Kapsamı (%)": st.column_config.NumberColumn(min_value=0, max_value=100, help="Olası zararın % kaçı sigorta/teminat kapsamındadır?"),
+                "Bilanço Direnci / İflas Eşiği (%)": st.column_config.NumberColumn(min_value=5, max_value=100),
+                "Teminat/Sigorta Kapsamı (%)": st.column_config.NumberColumn(min_value=0, max_value=100),
                 "Tahmini Yıllık Ciro (TL)": st.column_config.NumberColumn(format="₺%d"),
             },
             key="ist_editor"
@@ -377,5 +393,3 @@ with tab3:
                 st.dataframe(potansiyel[gosterilecek_kolonlar], use_container_width=True, hide_index=True)
             else:
                 st.info("Kriterlere uygun potansiyel müşteri bulunamadı.")
-        else:
-            st.warning("Verilerde 'Banka Müşterisi' veya 'KKB Notu' kolonları eksik. Lütfen sayfayı yenileyin.")
