@@ -48,7 +48,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VERİ ÜRETİCİ VE YARDIMCI FONKSİYONLAR
+# VERİ ÜRETİCİ (YENİ PAZARLAMA KALEMLERİ EKLENDİ)
 # ══════════════════════════════════════════════════════════════════════════════
 random.seed(42)
 
@@ -71,11 +71,19 @@ def build_default_mizan():
         borc, alacak = (hacim, 0.0) if prefix == "120" else (0.0, hacim)
         rows.append((hkod, unvan, sek, borc, alacak))
         
+    # Pazarlama tetikleyicilerini ateşleyecek sahte veriler
     sabitler = [
         ("101.01.001", "Tahsil Edilecek Çekler Merkez", "Finans", 2500000.0, 0.0),
-        ("102.01.001", "Garanti Bankası Mevduatı", "Finans", 400000.0, 0.0),
-        ("335.01.001", "Aylık Personel Maaşları", "İnsan Kaynakları", 0.0, 850000.0),
+        ("102.01.001", "Garanti Bankası Vadesiz Mevduat", "Finans", 400000.0, 0.0),
+        ("102.02.001", "Ziraat Bankası Yatırım ve Fon Hesabı", "Finans", 3400000.0, 0.0), # Yatırım Tetikleyici
+        ("103.01.001", "Verilen Çekler ve Ödeme Emirleri (-)", "Finans", 0.0, 1200000.0), # Çek Ürünü Tetikleyici
+        ("120.01.999", "Yurtiçi Muhtelif Alıcılar (100+ Alt Bayi)", "Satış", 18500000.0, 0.0), # DBS Ana Bayi Tetikleyici
         ("153.01.001", "Depodaki Ticari Mallar", "Stok", 1450000.0, 0.0),
+        ("172.01.001", "Yıllara Sair İnşaat Maliyetleri", "İnşaat", 5600000.0, 0.0), # İnşaat / Sigorta Tetikleyici
+        ("252.01.001", "Binalar ve Şube Tesisleri", "Duran Varlık", 12000000.0, 0.0), # DASK/İşyeri Sigortası Tetikleyici
+        ("254.01.001", "Taşıtlar (Ticari Araç Filosu)", "Duran Varlık", 4500000.0, 0.0), # Araç Kasko Tetikleyici
+        ("320.01.999", "Kuveyt Türk DBS Ana Bayileri (Örn: Çelik A.Ş.)", "Tedarik", 0.0, 6500000.0), # DBS Alt Bayi Tetikleyici
+        ("335.01.001", "Aylık Personel Maaşları", "İnsan Kaynakları", 0.0, 850000.0),
         ("601.01.001", "Yurtdışı İhracat Gelirleri", "Dış Ticaret", 0.0, 3500000.0),
         ("600.01.001", "Yurtiçi Satışlar", "Satış", 0.0, 15000000.0),
     ]
@@ -86,7 +94,8 @@ def hesapla_bakiye(row):
     prefix = str(row.get("Hesap_Kodu", "")).split(".")[0]
     borc = pd.to_numeric(row.get("Borc_Toplam", 0), errors='coerce') or 0.0
     alacak = pd.to_numeric(row.get("Alacak_Toplam", 0), errors='coerce') or 0.0
-    if prefix in ("101","102","120","150","153"): return abs(borc - alacak)
+    # 103 nolu hesap Aktif karakterli (-) olduğu için alacak kalanı verir.
+    if prefix in ("101","102","120","150","153","172","252","254"): return abs(borc - alacak)
     elif prefix in ("103","300","320","335","600","601"): return abs(alacak - borc)
     return abs(borc - alacak)
 
@@ -178,9 +187,6 @@ firma_listesi = ["(Seçiniz)"] + ist_df["Cari Unvanı"].tolist() if not ist_df.e
 
 krize_giren = st.sidebar.selectbox("Şok Yiyecek (Temerrüt) Firma:", firma_listesi)
 
-st.sidebar.info("""💡 **Dinamik Ağ Algoritması:**
-Her firmanın dayanıklılığı KENDİ KKB notuna ve Teminat gücüne göre ayrı ayrı hesaplanır. Ana müşterimiz ise kendi yüksek işlem hacmine ve teminatına göre korunur.""")
-
 # ══════════════════════════════════════════════════════════════════════════════
 # DİNAMİK SİMÜLASYON MOTORU
 # ══════════════════════════════════════════════════════════════════════════════
@@ -212,7 +218,6 @@ for _, row in ist_df.iterrows():
     }
     banka_kredi_riski += kredi_limit
 
-# YENİ DEĞİŞKENLER: Tekil NPL ve Toplam NPL Kıyaslaması İçin
 tekil_npl = 0.0
 npl_beklentisi = 0.0
 
@@ -223,7 +228,6 @@ if krize_giren != "(Seçiniz)" and krize_giren in node_status:
     tekil_npl = node_status[krize_giren]["kredi_riski"]
     npl_beklentisi += tekil_npl
     
-    # 1. Dalga: Merkez Müşterimize Gelen Şok
     batan_ile_hacim = node_status[krize_giren]["hacim_bizimle"]
     bagimlilik = batan_ile_hacim / node_status["ANA_MUSTERIMIZ"]["ciro"]
     merkez_hasar_katsayisi = (100 - node_status["ANA_MUSTERIMIZ"]["teminat"]) / 100.0 
@@ -236,37 +240,24 @@ if krize_giren != "(Seçiniz)" and krize_giren in node_status:
     elif node_status["ANA_MUSTERIMIZ"]["hasar_orani"] >= (node_status["ANA_MUSTERIMIZ"]["esik"]/2): 
         node_status["ANA_MUSTERIMIZ"]["durum"] = "Warning"
 
-    # 2. Dalga: Diğer Firmalara Ağ Bulaşması (YENİLENEN VURUCU ALGORİTMA)
     for diger_firma in node_status:
         if diger_firma not in ["ANA_MUSTERIMIZ", krize_giren]:
-            
-            # KKB Notu 650'nin altındaysa "Zayıf Halka" kabul et
             is_weak = node_status[diger_firma]["kkb"] < 650
-            
-            # Zayıflar kesinlikle etkileniyor (Sunumda gizli riski patlatmak için)
             if is_weak or random.random() < 0.35: 
-                
-                # Zayıf firmalar batan firmaya %60-%90 bağımlı, güçlüler %10-%30 bağımlı kurgulandı
                 d_bagimlilik = random.uniform(0.60, 0.90) if is_weak else random.uniform(0.10, 0.30)
-                
                 d_kkb_kirilganlik = max(0.2, (1000 - node_status[diger_firma]["kkb"]) / 400.0)
                 d_teminat_katsayisi = (100 - node_status[diger_firma]["teminat"])/100.0
                 
-                # Hasar Çarpanı
                 aldigi_hasar = (100.0 * d_bagimlilik * d_kkb_kirilganlik * d_teminat_katsayisi)
                 node_status[diger_firma]["hasar_orani"] += aldigi_hasar
                 
-                # İflas Eşiği Kontrolü
                 if node_status[diger_firma]["hasar_orani"] >= node_status[diger_firma]["esik"]:
                     node_status[diger_firma]["durum"] = "Failed"
-                    npl_beklentisi += node_status[diger_firma]["kredi_riski"]  # GİZLİ RİSK BURADA YAKALANIYOR!
+                    npl_beklentisi += node_status[diger_firma]["kredi_riski"]
                 elif node_status[diger_firma]["hasar_orani"] >= (node_status[diger_firma]["esik"]/2):
                     node_status[diger_firma]["durum"] = "Warning"
 
-# Kurtarılan Gizli Risk Hesaplaması (Fark 0 olmasın diye güvenlik eklendi)
 gizli_risk = npl_beklentisi - tekil_npl if npl_beklentisi > tekil_npl else 0.0
-
-# ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SEKMELER (TABS)
@@ -278,42 +269,20 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 1: SİMÜLASYON (GÜNCELLENMİŞ METRİK KARTLARI)
+# TAB 1: SİMÜLASYON
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 with tab1:
-    # 4 KOLONLU YENİ METRİK DÜZENİ (HİKAYEYE GÖRE)
     c1, c2, c3, c4 = st.columns(4)
-    
     with c1: 
-        st.markdown(f"""<div class="metric-card blue">
-          <div class="metric-title">Banka Toplam Kredi Riski</div>
-          <div class="metric-value">₺{banka_kredi_riski/1e6:.1f}M</div>
-          <div class="metric-sub">Tüm Ekosistem Limiti</div>
-        </div>""", unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card blue"><div class="metric-title">Banka Toplam Kredi Riski</div><div class="metric-value">₺{banka_kredi_riski/1e6:.1f}M</div><div class="metric-sub">Tüm Ekosistem Limiti</div></div>""", unsafe_allow_html=True)
     with c2: 
-        st.markdown(f"""<div class="metric-card warning">
-          <div class="metric-title">Tekil NPL (Geleneksel Yöntem)</div>
-          <div class="metric-value">₺{tekil_npl/1e6:.1f}M</div>
-          <div class="metric-sub">Sadece Tetiklenen Firma Riski</div>
-        </div>""", unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card warning"><div class="metric-title">Tekil NPL (Geleneksel Yöntem)</div><div class="metric-value">₺{tekil_npl/1e6:.1f}M</div><div class="metric-sub">Sadece Tetiklenen Firma Riski</div></div>""", unsafe_allow_html=True)
     with c3:
-        st.markdown(f"""<div class="metric-card danger">
-          <div class="metric-title">TrustGraph Domino NPL</div>
-          <div class="metric-value">₺{npl_beklentisi/1e6:.1f}M</div>
-          <div class="metric-sub">Tüm Zincirleme Batanlar Toplamı</div>
-        </div>""", unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card danger"><div class="metric-title">TrustGraph Domino NPL</div><div class="metric-value">₺{npl_beklentisi/1e6:.1f}M</div><div class="metric-sub">Tüm Zincirleme Batanlar Toplamı</div></div>""", unsafe_allow_html=True)
     with c4:
-        st.markdown(f"""<div class="metric-card purple">
-          <div class="metric-title">💡 Yakalanan Gizli Risk</div>
-          <div class="metric-value">₺{gizli_risk/1e6:.1f}M</div>
-          <div class="metric-sub">Geleneksel Modelin Göremediği Fark</div>
-        </div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card purple"><div class="metric-title">💡 Yakalanan Gizli Risk</div><div class="metric-value">₺{gizli_risk/1e6:.1f}M</div><div class="metric-sub">Geleneksel Modelin Göremediği Fark</div></div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="section-header">🕸️ Dinamik Tedarik Zinciri Ağ Haritası</div>', unsafe_allow_html=True)
-    st.caption("Not: Her firmanın balonu üzerine fareyle geldiğinizde, firmaya özel İflas Eşiğini ve Teminat gücünü görebilirsiniz.")
     
     G = nx.DiGraph()
     m_stat = node_status["ANA_MUSTERIMIZ"]
@@ -323,12 +292,7 @@ with tab1:
         if unvan == "ANA_MUSTERIMIZ": continue
         color = "#ef4444" if data["durum"]=="Failed" else ("#f59e0b" if data["durum"]=="Warning" else "#10b981")
         size = max(15, min(35, int((data["kredi_riski"]/5_000_000)*10) + 15))
-        
-        tooltip = (f"<b>{unvan}</b><br>KKB Notu: {data['kkb']}<br>"
-                   f"Teminat Koruma Oranı: %{data['teminat']}<br>"
-                   f"Kırılma (İflas) Eşiği: %{data['esik']}<br>---<br>"
-                   f"Anlık Hasar: %{data['hasar_orani']:.1f}<br>Durum: {data['durum']}")
-                   
+        tooltip = (f"<b>{unvan}</b><br>KKB Notu: {data['kkb']}<br>Teminat Koruma Oranı: %{data['teminat']}<br>Kırılma (İflas) Eşiği: %{data['esik']}<br>---<br>Anlık Hasar: %{data['hasar_orani']:.1f}<br>Durum: {data['durum']}")
         G.add_node(unvan, size=size, color=color, title=tooltip, label=unvan[:15])
         G.add_edge(unvan, "ANA MÜŞTERİMİZ", color="#cbd5e1", width=max(1, int(data["hacim_bizimle"]/10_000_000)))
         if unvan != krize_giren and data["durum"] != "Safe": G.add_edge(krize_giren, unvan, color="#8b5cf6", dashes=True, width=2)
@@ -353,7 +317,6 @@ with tab2:
         st.dataframe(show_df, use_container_width=True, hide_index=True, height=450)
     with col_r:
         st.markdown('<div class="section-header">🔬 İnteraktif İstihbarat Matrisi (Firma Spesifik Parametreler)</div>', unsafe_allow_html=True)
-        
         edited = st.data_editor(
             st.session_state.istihbarat,
             use_container_width=True, hide_index=True, height=450,
@@ -369,22 +332,94 @@ with tab2:
         st.session_state.istihbarat = edited
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 3: PAZARLAMA VE ÇAPRAZ SATIŞ PORTALI
+# TAB 3: PAZARLAMA VE ÇAPRAZ SATIŞ PORTALI (MİZAN ODAKLI YENİ TETİKLEYİCİLER)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 with tab3:
-    st.markdown('<div class="section-header">🎯 Modül: Gelişmiş Çapraz Satış Tetikleyicileri (Kebir Hesap Analizi)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🎯 Modül: Mizan Satırlarından Zeki Çapraz Satış (Kebir Hesap Analizi)</div>', unsafe_allow_html=True)
     triggers = []
 
     if "Bakiye" in mizan_df.columns:
-        personel = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("335")]["Bakiye"].sum()
-        if personel > 200_000: triggers.append({"Hesap Grubu":"335", "Tespit":f"Yüksek maaş borcu: ₺{personel:,.0f}", "Aksiyon":"Maaş Protokolü Teklifi", "Öncelik":"🔴 Yüksek"})
+        
+        # 1. KURAL: 120 Hesaplar (DBS Ana Bayi Kurgusu)
+        for _, row in mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("120")].iterrows():
+            if "100+" in str(row["Cari_Unvan"]) or "Bayi" in str(row["Cari_Unvan"]) or row["Bakiye"] > 10_000_000:
+                triggers.append({
+                    "Hesap Grubu": "120 — Alıcılar",
+                    "Tespit": "Yaygın alıcı ağı / 100+ Alt Bayi Potansiyeli",
+                    "Aksiyon": "DBS (Doğrudan Borçlandırma Sistemi) Ana Bayisi Yapılandırması",
+                    "Öncelik": "🔴 Yüksek"
+                })
+                break # Tek uyarı yeterli
 
-        cek_bakiye = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("101")]["Bakiye"].sum()
-        alan_120 = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("120")]["Bakiye"].sum() or 1.0
-        if (cek_bakiye / alan_120) > 0.10: triggers.append({"Hesap Grubu":"101", "Tespit":f"Çek birikimi: ₺{cek_bakiye:,.0f}", "Aksiyon":"Çek İskonto Teklifi", "Öncelik":"🟠 Orta"})
+        # 2. KURAL: 320 Hesaplar (DBS Alt Bayi Kurgusu)
+        for _, row in mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("320")].iterrows():
+            if "Ana Bayi" in str(row["Cari_Unvan"]) or "Kuveyt" in str(row["Cari_Unvan"]):
+                triggers.append({
+                    "Hesap Grubu": "320 — Satıcılar",
+                    "Tespit": "Bankamız mevcut DBS ana bayilerine borç bakiyesi tespiti",
+                    "Aksiyon": "DBS Alt Bayisi Olarak Tanımlama ve Limit Tahsisi",
+                    "Öncelik": "🔴 Yüksek"
+                })
+                break
 
-        ihracat = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("601")]["Bakiye"].sum()
-        if ihracat > 500_000: triggers.append({"Hesap Grubu":"601", "Tespit":f"İhracat Geliri: ₺{ihracat:,.0f}", "Aksiyon":"Akreditif Finansmanı", "Öncelik":"🔴 Yüksek"})
+        # 3. KURAL: 103 Hesap (Çek Karnesi)
+        cek_verilen = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("103")]["Bakiye"].sum()
+        if cek_verilen > 0:
+            triggers.append({
+                "Hesap Grubu": "103 — Verilen Çekler",
+                "Tespit": f"Aktif çek ödemeleri tespit edildi: ₺{cek_verilen:,.0f}",
+                "Aksiyon": "Kuveyt Türk Çek Karnesi ve Çek Finansmanı Ürünleri Teklifi",
+                "Öncelik": "🟠 Orta"
+            })
+
+        # 4. KURAL: 102 Hesap (Rakip Banka Yatırım / Mevduat Analizi)
+        for _, row in mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("102")].iterrows():
+            unvan = str(row["Cari_Unvan"]).lower()
+            bakiye = row["Bakiye"]
+            if bakiye > 0:
+                if "yatırım" in unvan or "fon" in unvan or "hisse" in unvan:
+                    triggers.append({
+                        "Hesap Grubu": "102 — Bankalar (Yatırım)",
+                        "Tespit": f"Rakip bankada aktif yatırım hesabı ({row['Cari_Unvan']}): ₺{bakiye:,.0f}",
+                        "Aksiyon": "TradePlus Hisse Senedi ve Yatırım Hesabı Açılış Teklifi",
+                        "Öncelik": "🔴 Yüksek"
+                    })
+                else:
+                    triggers.append({
+                        "Hesap Grubu": "102 — Bankalar (Vadesiz/Katılma)",
+                        "Tespit": f"Rakip banka mevduatı ({row['Cari_Unvan']}): ₺{bakiye:,.0f}",
+                        "Aksiyon": "Katılma Hesabı ve Nakit Yönetimi Teklifi",
+                        "Öncelik": "🟢 Standart"
+                    })
+
+        # 5. KURAL: 250+ Hesaplar (Duran Varlıklar ve Sigorta)
+        bina = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("252")]["Bakiye"].sum()
+        if bina > 0:
+            triggers.append({
+                "Hesap Grubu": "252 — Binalar",
+                "Tespit": f"Aktif gayrimenkul / tesis varlığı tespit edildi: ₺{bina:,.0f}",
+                "Aksiyon": "İşyeri Paket Sigortası ve DASK Yenileme Teklifi",
+                "Öncelik": "🟠 Orta"
+            })
+            
+        tasit = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("254")]["Bakiye"].sum()
+        if tasit > 0:
+            triggers.append({
+                "Hesap Grubu": "254 — Taşıtlar",
+                "Tespit": f"Ticari Araç Filosu Tespiti: ₺{tasit:,.0f}",
+                "Aksiyon": "Filo Kasko ve Trafik Sigortası Poliçe Teklifi",
+                "Öncelik": "🟢 Standart"
+            })
+
+        # 6. KURAL: 172 Hesap (İnşaat Projesi)
+        insaat = mizan_df[mizan_df["Hesap_Kodu"].astype(str).str.startswith("172")]["Bakiye"].sum()
+        if insaat > 0:
+            triggers.append({
+                "Hesap Grubu": "172 — Yıllara Sair İnşaat",
+                "Tespit": f"Aktif şantiye / inşaat projesi maliyetleri: ₺{insaat:,.0f}",
+                "Aksiyon": "İnşaat All Risk Sigortası + Proje Mevduat Yönetimine Talip Olunması",
+                "Öncelik": "🔴 Yüksek"
+            })
 
     if triggers: st.dataframe(pd.DataFrame(triggers), use_container_width=True, hide_index=True)
     else: st.success("✅ Şu anda aktif çapraz satış tetikleyicisi bulunmamaktadır.")
