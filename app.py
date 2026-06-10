@@ -223,10 +223,11 @@ if krize_giren != "(Seçiniz)" and krize_giren in node_status:
     tekil_npl = node_status[krize_giren]["kredi_riski"]
     npl_beklentisi += tekil_npl
     
+    # 1. Dalga: Merkez Müşterimize Gelen Şok
     batan_ile_hacim = node_status[krize_giren]["hacim_bizimle"]
     bagimlilik = batan_ile_hacim / node_status["ANA_MUSTERIMIZ"]["ciro"]
-    
     merkez_hasar_katsayisi = (100 - node_status["ANA_MUSTERIMIZ"]["teminat"]) / 100.0 
+    
     ana_hasar = (100.0 * bagimlilik * ((1000 - node_status["ANA_MUSTERIMIZ"]["kkb"]) / 400.0) * merkez_hasar_katsayisi)
     node_status["ANA_MUSTERIMIZ"]["hasar_orani"] += ana_hasar
     
@@ -235,23 +236,37 @@ if krize_giren != "(Seçiniz)" and krize_giren in node_status:
     elif node_status["ANA_MUSTERIMIZ"]["hasar_orani"] >= (node_status["ANA_MUSTERIMIZ"]["esik"]/2): 
         node_status["ANA_MUSTERIMIZ"]["durum"] = "Warning"
 
+    # 2. Dalga: Diğer Firmalara Ağ Bulaşması (YENİLENEN VURUCU ALGORİTMA)
     for diger_firma in node_status:
         if diger_firma not in ["ANA_MUSTERIMIZ", krize_giren]:
-            if random.random() < 0.35: 
-                d_bagimlilik = (node_status[diger_firma]["ciro"] * random.uniform(0.1, 0.5)) / node_status[diger_firma]["ciro"]
-                d_kkb_kirilganlik = max(0.1, (1000 - node_status[diger_firma]["kkb"]) / 400.0)
+            
+            # KKB Notu 650'nin altındaysa "Zayıf Halka" kabul et
+            is_weak = node_status[diger_firma]["kkb"] < 650
+            
+            # Zayıflar kesinlikle etkileniyor (Sunumda gizli riski patlatmak için)
+            if is_weak or random.random() < 0.35: 
+                
+                # Zayıf firmalar batan firmaya %60-%90 bağımlı, güçlüler %10-%30 bağımlı kurgulandı
+                d_bagimlilik = random.uniform(0.60, 0.90) if is_weak else random.uniform(0.10, 0.30)
+                
+                d_kkb_kirilganlik = max(0.2, (1000 - node_status[diger_firma]["kkb"]) / 400.0)
                 d_teminat_katsayisi = (100 - node_status[diger_firma]["teminat"])/100.0
                 
-                node_status[diger_firma]["hasar_orani"] += (100.0 * d_bagimlilik * d_kkb_kirilganlik * d_teminat_katsayisi)
+                # Hasar Çarpanı
+                aldigi_hasar = (100.0 * d_bagimlilik * d_kkb_kirilganlik * d_teminat_katsayisi)
+                node_status[diger_firma]["hasar_orani"] += aldigi_hasar
                 
+                # İflas Eşiği Kontrolü
                 if node_status[diger_firma]["hasar_orani"] >= node_status[diger_firma]["esik"]:
                     node_status[diger_firma]["durum"] = "Failed"
-                    npl_beklentisi += node_status[diger_firma]["kredi_riski"]
+                    npl_beklentisi += node_status[diger_firma]["kredi_riski"]  # GİZLİ RİSK BURADA YAKALANIYOR!
                 elif node_status[diger_firma]["hasar_orani"] >= (node_status[diger_firma]["esik"]/2):
                     node_status[diger_firma]["durum"] = "Warning"
 
-# Kurtarılan Gizli Risk Hesaplaması
+# Kurtarılan Gizli Risk Hesaplaması (Fark 0 olmasın diye güvenlik eklendi)
 gizli_risk = npl_beklentisi - tekil_npl if npl_beklentisi > tekil_npl else 0.0
+
+# ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SEKMELER (TABS)
