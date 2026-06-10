@@ -1,15 +1,4 @@
-Evet, bu hata teknik olarak aynı kökten (Pandas'ın kolon yapısını kaybetmesi veya okuyamaması) geliyor. Özellikle dışarıdan Excel yüklendiğinde, kolonların sayısal algılanması (örneğin hesap kodlarının metin yerine integer algılanması) veya örnekleme (sampling) sırasında dataframe indekslerinin bozulması uygulamanın çökmesine neden olur.
-
-Bir daha benzer hiçbir hata (`KeyError`, `AttributeError`, `ZeroDivisionError`) almamanız için kodu **tamamen zırhlandırdım**. Yapılan kritik düzeltmeler:
-
-1. **Güvenli Örnekleme (Safe Sampling):** Gruplama (groupby) sırasında kolonların düşmesini engellemek için direkt örnekleme metoduna geçildi.
-2. **`.get()` Metodu Entegrasyonu:** Grafik düğümleri oluşturulurken değerler doğrudan `row['Sektor']` şeklinde değil, hata vermeyen `row.get('Sektor', 'Bilinmiyor')` formatıyla çağrıldı.
-3. **Tip Güvenliği (Type Safety):** Excel'den gelen "Hesap Kodu" gibi kolonların `.str` fonksiyonlarında hata vermemesi için tamamı `.astype(str)` ile korumaya alındı.
-4. **Excel Yükleme Kontrolü:** Eksik veya hatalı formatta Excel yüklendiğinde uygulamanın çökmemesi için yükleme esnasına doğrulama (validation) eklendi.
-
-Aşağıdaki kodu tamamen kopyalayıp dosyanıza yapıştırabilirsiniz:
-
-```python
+python
 import streamlit as st
 import networkx as nx
 from pyvis.network import Network
